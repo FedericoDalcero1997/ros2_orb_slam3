@@ -4,64 +4,54 @@
 """
 Python node for the MonocularMode cpp node.
 
+Minimal adaptation for live ZED camera input:
+- keeps the original handshake
+- keeps the original topics
+- keeps the original main loop structure as much as possible
+- replaces dataset image loading with subscription to ZED image topic
+- resizes images to 640x400 preserving the original 16:10 aspect ratio
+
 Author: Azmyin Md. Kamal
-Date: 01/01/2024
-
-Requirements
-* Dataset must be configured in EuRoC MAV format
-* Paths to dataset must be set before bulding (or running) this node
-* Make sure to set path to your workspace in common.hpp
-
-Command line arguments
--- settings_name: EuRoC, TUM2, KITTI etc; the name of the .yaml file containing camera intrinsics and other configurations
--- image_seq: MH01, V102, etc; the name of the image sequence you want to run
-
+Adapted for ZED live input
 """
 
 # Imports
-#* Import Python modules
-import sys # System specific modules
-import os # Operating specific functions
+import sys
+import os
 import glob
-import time # Python timing module
-import copy # For deepcopying arrays
-import shutil # High level folder operation tool
-from pathlib import Path # To find the "home" directory location
-import argparse # To accept user arguments from commandline
-import natsort # To ensure all images are chosen loaded in the correct order
-import yaml # To manipulate YAML files for reading configuration files
-import copy # For making deepcopies of openCV matrices, python lists, numpy arrays etc.
-import numpy as np # Python Linear Algebra module
-import cv2 # OpenCV
+import time
+import copy
+import shutil
+from pathlib import Path
+import argparse
+import natsort
+import yaml
+import copy
+import numpy as np
+import cv2
 
-#* ROS2 imports
+# ROS2 imports
 import ament_index_python.packages
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.qos import qos_profile_sensor_data
 
-# If you have more files in the submodules folder
-# from .submodules.py_utils import fn1 # Import helper functions from files in your submodules folder
+from sensor_msgs.msg import Image
+from std_msgs.msg import String, Float64
+from cv_bridge import CvBridge, CvBridgeError
 
-# Import a custom message interface
-# from your_custom_msg_interface.msg import CustomMsg #* Note the camel caps convention
 
-# Import ROS2 message templates
-from sensor_msgs.msg import Image # http://wiki.ros.org/sensor_msgs
-from std_msgs.msg import String, Float64 # ROS2 string message template
-from cv_bridge import CvBridge, CvBridgeError # Library to convert image messages to numpy array
-
-#* Class definition
 class MonoDriver(Node):
-    def __init__(self, node_name = "mono_py_node"):
-        super().__init__(node_name) # Initializes the rclpy.Node class. It expects the name of the node
+    def __init__(self, node_name="mono_py_node"):
+        super().__init__(node_name)
 
-        # Initialize parameters to be passed from the command line (or launch file)
-        self.declare_parameter("settings_name","EuRoC")
-        self.declare_parameter("image_seq","NULL")
+        # Initialize parameters
+        self.declare_parameter("settings_name", "ZEDXOneGS")
+        self.declare_parameter("image_seq", "NULL")
 
-        #* Parse values sent by command line
-        self.settings_name = str(self.get_parameter('settings_name').value) 
+        # Parse values sent by command line
+        self.settings_name = str(self.get_parameter('settings_name').value)
         self.image_seq = str(self.get_parameter('image_seq').value)
 
         # DEBUG
@@ -70,10 +60,10 @@ class MonoDriver(Node):
         print(f"self.image_seq: {self.image_seq}")
         print()
 
-        # Global path definitions
-        self.home_dir = str(Path.home()) + "/ros2_test/src/ros2_orb_slam3" #! Change this to match path to your workspace
-        self.parent_dir = "TEST_DATASET" #! Change or provide path to the parent directory where data for all image sequences are stored
-        self.image_sequence_dir = self.home_dir + "/" + self.parent_dir + "/" + self.image_seq # Full path to the image sequence folder
+        # Kept only to minimize changes from original file
+        self.home_dir = str(Path.home()) + "/ros2_test/src/ros2_orb_slam3"
+        self.parent_dir = "TEST_DATASET"
+        self.image_sequence_dir = self.home_dir + "/" + self.parent_dir + "/" + self.image_seq
 
         print(f"self.image_sequence_dir: {self.image_sequence_dir}\n")
 
@@ -81,175 +71,201 @@ class MonoDriver(Node):
         self.node_name = "mono_py_driver"
         self.image_seq_dir = ""
         self.imgz_seqz = []
-        self.time_seqz = [] # Maybe redundant
+        self.time_seqz = []
 
         # Define a CvBridge object
         self.br = CvBridge()
 
-        # Read images from the chosen dataset, order them in ascending order and prepare timestep data as well
-        self.imgz_seqz_dir, self.imgz_seqz, self.time_seqz = self.get_image_dataset_asl(self.image_sequence_dir, "mav0") 
+        # Live ZED cache
+        self.latest_frame = None
+        self.latest_timestamp = None
+        self.latest_header = None
+        self.last_published_timestamp = None
 
-        print(self.image_seq_dir)
-        print(len(self.imgz_seqz))
-
-        #* ROS2 publisher/subscriber variables [HARDCODED]
-        self.pub_exp_config_name = "/mono_py_driver/experiment_settings" 
+        # ROS2 publisher/subscriber variables [HARDCODED]
+        self.pub_exp_config_name = "/mono_py_driver/experiment_settings"
         self.sub_exp_ack_name = "/mono_py_driver/exp_settings_ack"
         self.pub_img_to_agent_name = "/mono_py_driver/img_msg"
         self.pub_timestep_to_agent_name = "/mono_py_driver/timestep_msg"
-        self.send_config = True # Set False once handshake is completed with the cpp node
-        
-        #* Setup ROS2 publishers and subscribers
-        self.publish_exp_config_ = self.create_publisher(String, self.pub_exp_config_name, 1) # Publish configs to the ORB-SLAM3 C++ node
+        self.send_config = True
 
-        #* Build the configuration string to be sent out
-        #self.exp_config_msg = self.settings_name + "/" + self.image_seq # Example EuRoC/sample_euroc_MH05
-        self.exp_config_msg = self.settings_name # Example EuRoC
+        # Setup ROS2 publishers and subscribers
+        self.publish_exp_config_ = self.create_publisher(
+            String,
+            self.pub_exp_config_name,
+            10
+        )
+
+        # Build the configuration string to be sent out
+        self.exp_config_msg = self.settings_name
         print(f"Configuration to be sent: {self.exp_config_msg}")
 
-
-        #* Subscriber to get acknowledgement from CPP node that it received experimetn settings
-        self.subscribe_exp_ack_ = self.create_subscription(String, 
-                                                           self.sub_exp_ack_name, 
-                                                           self.ack_callback ,10)
+        # Subscriber to get acknowledgement from CPP node
+        self.subscribe_exp_ack_ = self.create_subscription(
+            String,
+            self.sub_exp_ack_name,
+            self.ack_callback,
+            10
+        )
         self.subscribe_exp_ack_
 
-        # Publisher to send RGB image
-        self.publish_img_msg_ = self.create_publisher(Image, self.pub_img_to_agent_name, 1)
-        
-        self.publish_timestep_msg_ = self.create_publisher(Float64, self.pub_timestep_to_agent_name, 1)
+        # Publishers
+        self.publish_img_msg_ = self.create_publisher(
+            Image,
+            self.pub_img_to_agent_name,
+            10
+        )
 
+        self.publish_timestep_msg_ = self.create_publisher(
+            Float64,
+            self.pub_timestep_to_agent_name,
+            10
+        )
+
+        # Subscribe to ZED grayscale image
+        self.zed_sub_ = self.create_subscription(
+            Image,
+            '/zed/zed_node/gray/rect/image',
+            self.zed_callback,
+            qos_profile_sensor_data
+        )
 
         # Initialize work variables for main logic
-        self.start_frame = 0 # Default 0
-        self.end_frame = -1 # Default -1
-        self.frame_stop = -1 # Set -1 to use the whole sequence, some positive integer to force sequence to stop, 350 test2, 736 test3
-        self.show_imgz = False # Default, False, set True to see the output directly from this node
-        self.frame_id = 0 # Integer id of an image frame
-        self.frame_count = 0 # Ensure we are consistent with the count number of the frame
-        self.inference_time = [] # List to compute average time
+        self.start_frame = 0
+        self.end_frame = -1
+        self.frame_stop = -1
+        self.show_imgz = False
+        self.frame_id = 0
+        self.frame_count = 0
+        self.inference_time = []
 
         print()
-        print(f"MonoDriver initialized, attempting handshake with CPP node")
-    # ****************************************************************************************
+        print("MonoDriver initialized, attempting handshake with CPP node")
 
     # ****************************************************************************************
-    def get_image_dataset_asl(self, exp_dir, agent_name = "mav0"):
+    def zed_callback(self, msg):
         """
-            Returns images and list of timesteps in ascending order from a ASL formatted dataset
+        Receive latest frame from ZED and cache it.
         """
-        
-        # Define work variables
-        imgz_file_list = []
-        time_list = []
+        try:
+            frame = self.br.imgmsg_to_cv2(msg, desired_encoding="mono8")
+            frame = cv2.resize(frame, (640, 400), interpolation=cv2.INTER_AREA)
 
-        #* Only works for EuRoC MAV format
-        agent_cam0_fld = exp_dir + "/" + agent_name + "/" + "cam0"
-        imgz_file_dir = agent_cam0_fld + "/" + "data" + "/"
-        imgz_file_list = natsort.natsorted(os.listdir(imgz_file_dir),reverse=False)
-        # print(len(img_file_list)) # Debug, checks the number of rgb images
-
-        # Extract timesteps from image names
-        for iox in imgz_file_list:
-            time_step = iox.split(".")[0]
-            time_list.append(time_step)
-            #print(time_step)
-
-        return imgz_file_dir, imgz_file_list, time_list
+            self.latest_frame = frame
+            self.latest_timestamp = float(msg.header.stamp.sec) + float(msg.header.stamp.nanosec) * 1e-9
+            self.latest_header = msg.header
+        except Exception as e:
+            print(f"zed_callback error: {e}")
     # ****************************************************************************************
 
     # ****************************************************************************************
     def ack_callback(self, msg):
         """
-            Callback function
+        Callback function
         """
         print(f"Got ack: {msg.data}")
-        
+
         if(msg.data == "ACK"):
             self.send_config = False
-            # self.subscribe_exp_ack_.destory() # TODO doesn't work 
     # ****************************************************************************************
-    
+
     # ****************************************************************************************
     def handshake_with_cpp_node(self):
         """
-            Send and receive acknowledge of sent configuration settings
+        Send and receive acknowledge of sent configuration settings
         """
-        if (self.send_config == True):
-            # print(f"Sent mesasge: {self.exp_config_msg}")
+        if self.send_config is True:
             msg = String()
             msg.data = self.exp_config_msg
             self.publish_exp_config_.publish(msg)
             time.sleep(0.01)
     # ****************************************************************************************
-    
+
     # ****************************************************************************************
     def run_py_node(self, idx, imgz_name):
         """
-            Master function that sends the RGB image message to the CPP node
+        Master function that sends the image message to the CPP node.
+        Minimal change: uses latest ZED frame instead of reading from disk.
         """
 
-        # Initialize work variables
-        img_msg = None # sensor_msgs image object
+        if self.latest_frame is None or self.latest_timestamp is None:
+            print("[PY] No frame yet, skipping publish")
+            return
 
-        # Path to this image
-        img_look_up_path = self.imgz_seqz_dir  + imgz_name
-        timestep = float(imgz_name.split(".")[0]) # Kept if you use a custom message interface to also pass timestep value
-        self.frame_id = self.frame_id + 1  
-        #print(img_look_up_path)
-        # print(f"Frame ID: {frame_id}")
+        if self.last_published_timestamp == self.latest_timestamp:
+            print("[PY] Same frame as previous, skipping publish")
+            return
 
-        # Based on the tutorials
-        img_msg = self.br.cv2_to_imgmsg(cv2.imread(img_look_up_path), encoding="passthrough")
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if (now - self.latest_timestamp) > 0.1:
+            print(f"[PY] Stale frame ({now - self.latest_timestamp:.3f}s old), skipping")
+            return
+
+        timestep = self.latest_timestamp
+        self.frame_id = self.frame_id + 1
+
+        img_msg = self.br.cv2_to_imgmsg(self.latest_frame, encoding="mono8")
+
+        if self.latest_header is not None:
+            img_msg.header = self.latest_header
+            img_msg.header.stamp = self.latest_header.stamp
+
         timestep_msg = Float64()
         timestep_msg.data = timestep
 
-        # Publish RGB image and timestep, must be in the order shown below. I know not very optimum, you can use a custom message interface to send both
         try:
-            self.publish_timestep_msg_.publish(timestep_msg) 
+            self.publish_timestep_msg_.publish(timestep_msg)
+            
             self.publish_img_msg_.publish(img_msg)
+
+            self.last_published_timestamp = self.latest_timestamp
+
         except CvBridgeError as e:
             print(e)
+        except Exception as e:
+            print(f"[PY] publish error: {e}")
     # ****************************************************************************************
-        
+
 
 # main function
-def main(args = None):
-    rclpy.init(args=args) # Initialize node
-    n = MonoDriver("mono_py_node") #* Initialize the node
-    rate = n.create_rate(20) # https://answers.ros.org/question/358343/rate-and-sleep-function-in-rclpy-library-for-ros2/
-    
-    #* Blocking loop to initialize handshake
-    while(n.send_config == True):
+def main(args=None):
+    rclpy.init(args=args)
+    n = MonoDriver("mono_py_node")
+
+    # Blocking loop to initialize handshake
+    while n.send_config is True:
         n.handshake_with_cpp_node()
-        rclpy.spin_once(n)
-        #self.rate.sleep(10) # Potential bug, breaks code
+        rclpy.spin_once(n, timeout_sec=0.1)
 
-        if(n.send_config == False):
+        if n.send_config is False:
             break
-        
-    print(f"Handshake complete")
 
-    #* Blocking loop to send RGB image and timestep message
-    for idx, imgz_name in enumerate(n.imgz_seqz[n.start_frame:n.end_frame]):
-        try:
-            rclpy.spin_once(n) # Blocking we need a non blocking take care of callbacks
-            n.run_py_node(idx, imgz_name)
-            rate.sleep()
+    print("Handshake complete")
 
-            # DEBUG, if you want to halt sending images after a certain Frame is reached
-            if (n.frame_id>n.frame_stop and n.frame_stop != -1):
-                print(f"BREAK!")
-                break
-        
-        except KeyboardInterrupt:
-            break
+    # Small delay after ACK
+    time.sleep(1.0)
+
+    # Blocking loop to send image and timestep message
+    try:
+        target_period = 1.0 / 30.0
+        while rclpy.ok():
+            start_time = time.time()
+            rclpy.spin_once(n, timeout_sec=target_period * 0.8)
+            n.run_py_node(0, "")
+            elapsed = time.time() - start_time
+            sleep_time = target_period - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    except KeyboardInterrupt:
+        pass
 
     # Cleanup
-    cv2.destroyAllWindows() # Close all image windows
-    n.destroy_node() # Release all resource related to this node
+    cv2.destroyAllWindows()
+    n.destroy_node()
     rclpy.shutdown()
 
+
 # Dunders, this .py is the main file
-if __name__=="__main__":
+if __name__ == "__main__":
     main()

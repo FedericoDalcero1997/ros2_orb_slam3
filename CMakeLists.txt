@@ -45,6 +45,8 @@ include_directories(
   ${ament_INCLUDE_DIRS}
 )
 
+add_subdirectory(${PROJECT_SOURCE_DIR}/orb_slam3/Thirdparty/DBoW2)
+add_subdirectory(${PROJECT_SOURCE_DIR}/orb_slam3/Thirdparty/g2o)
 
 set(THIS_PACKAGE_INCLUDE_DEPENDS
   rclcpp
@@ -134,8 +136,8 @@ target_link_libraries(orb_slam3_lib
   ${OpenCV_LIBS}
   ${EIGEN3_LIBS}
   ${Pangolin_LIBRARIES}
-  ${PROJECT_SOURCE_DIR}/orb_slam3/Thirdparty/DBoW2/lib/libDBoW2.so
-  ${PROJECT_SOURCE_DIR}/orb_slam3/Thirdparty/g2o/lib/libg2o.so
+  DBoW2
+  g2o
   -lboost_system
   -lboost_serialization
   -lcrypto 
@@ -143,12 +145,6 @@ target_link_libraries(orb_slam3_lib
 
 
 # Find the .so files provided in ros2_orb_slam3/orb_slam3/Thirdparty projects
-set(DBoW2_PATH "${PROJECT_SOURCE_DIR}/orb_slam3/Thirdparty/DBoW2/lib/libDBoW2.so")
-set(g2o_PATH "${PROJECT_SOURCE_DIR}/orb_slam3/Thirdparty/g2o/lib/libg2o.so")
-
-# Install .so files to the lib directory in the install space
-install(FILES ${DBoW2_PATH} DESTINATION lib)
-install(FILES ${g2o_PATH} DESTINATION lib)
 
 
 # Add executable
@@ -197,5 +193,7 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+
+ament_export_libraries(g2o)
 
 ament_package()

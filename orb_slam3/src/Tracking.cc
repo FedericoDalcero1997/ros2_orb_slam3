@@ -1943,7 +1943,7 @@ void Tracking::Track()
             MonocularInitialization();
         }
 
-        //mpFrameDrawer->Update(this);
+        mpFrameDrawer->Update(this);
 
         if(mState!=OK) // If rightly initialized, mState=OK
         {

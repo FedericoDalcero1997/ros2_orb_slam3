@@ -10,8 +10,10 @@
 #include <vector> // vectors are sequence containers representing arrays that can change in size.
 #include <queue>
 #include <thread> // class to represent individual threads of execution.
+#include <condition_variable>   // mancante — serve per frameCV_
 #include <mutex> // A mutex is a lockable object that is designed to signal when critical sections of code need exclusive access, preventing other threads with the same protection from executing concurrently and access the same memory locations.
 #include <cstdlib> // to find home directory
+#include <deque>
 
 #include <cstring>
 #include <sstream> // String stream processing functionalities
@@ -26,6 +28,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/imu.hpp"
 using std::placeholders::_1; //* TODO why this is suggested in official tutorial
 
 // Include Eigen
@@ -44,6 +47,7 @@ using std::placeholders::_1; //* TODO why this is suggested in official tutorial
 #include <image_transport/image_transport.h>
 
 //* ORB SLAM 3 includes
+#include "ImuTypes.h"
 #include "System.h" //* Also imports the ORB_SLAM3 namespace
 
 //* Gobal defs
@@ -80,12 +84,14 @@ class MonocularMode : public rclcpp::Node
         std::string pubconfigackName = ""; // Publisher topic name
         std::string subImgMsgName = ""; // Topic to subscribe to receive RGB images from a python node
         std::string subTimestepMsgName = ""; // Topic to subscribe to receive the timestep related to the 
+        std::string subImuMsgName;
 
         //* Definitions of publisher and subscribers
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr expConfig_subscription_;
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr configAck_publisher_;
         rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subImgMsg_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr subTimestepMsg_subscription_;
+        rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr subImuMsg_subscription_;
 
         //* ORB_SLAM3 related variables
         ORB_SLAM3::System* pAgent; // pointer to a ORB SLAM3 object
@@ -93,15 +99,33 @@ class MonocularMode : public rclcpp::Node
         bool enablePangolinWindow = false; // Shows Pangolin window output
         bool enableOpenCVWindow = false; // Shows OpenCV window output
 
+        std::deque<sensor_msgs::msg::Imu> imuBuf;
+        std::mutex imuMutex;
+
+        std::thread trackingThread_;
+        std::mutex frameMutex_;
+        std::condition_variable frameCV_;
+        struct PendingFrame {
+            cv::Mat image;
+            double timestamp;
+            std::vector<ORB_SLAM3::IMU::Point> imuMeas;
+            bool valid = false;
+        };
+        PendingFrame pendingFrame_;
+        bool stopTracking_ = false;
+
+        double lastImageTime = -1.0;
+
         //* ROS callbacks
         void experimentSetting_callback(const std_msgs::msg::String& msg); // Callback to process settings sent over by Python node
         void Timestep_callback(const std_msgs::msg::Float64& time_msg); // Callback to process the timestep for this image
         void Img_callback(const sensor_msgs::msg::Image& msg); // Callback to process RGB image and semantic matrix sent by Python node
+        void Imu_callback(const sensor_msgs::msg::Imu& msg); // Callback to process IMU data sent by Python node
         
         //* Helper functions
         // ORB_SLAM3::eigenMatXf convertToEigenMat(const std_msgs::msg::Float32MultiArray& msg); // Helper method, converts semantic matrix eigenMatXf, a Eigen 4x4 float matrix
         void initializeVSLAM(std::string& configString); //* Method to bind an initialized VSLAM framework to this node
-
+        void trackingLoop(); //* Main tracking loop that runs in a separate thread, continuously checking for new frames to process
 
 };
 

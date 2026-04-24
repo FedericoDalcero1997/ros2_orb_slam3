@@ -1,3 +1,55 @@
-README.md
+# =========================
+# ROS2 / colcon
+# =========================
+build/
+install/
+log/
+
+# =========================
+# CMake / C++
+# =========================
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.o
+*.so
+*.a
+*.out
+
+# =========================
+# ORB-SLAM3 build artifacts
+# =========================
+orb_slam3/Thirdparty/*/build/
+orb_slam3/Thirdparty/*/lib/*.so
+
+# ⚠️ IMPORTANT: evita di versionare librerie compilate
+orb_slam3/Thirdparty/DBoW2/lib/
+orb_slam3/Thirdparty/g2o/lib/
+
+# =========================
+# Dataset / file pesanti
+# =========================
+TEST_DATASET/
+*.bag
+*.db3
 *.mp4
+*.avi
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+
+# =========================
+# IDE
+# =========================
 .vscode/
+.idea/
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db

@@ -48,7 +48,7 @@ public:
 
 private:
     std::string homeDir = "";
-    std::string packagePath = "ros2_test/src/ros2_orb_slam3/";
+    std::string packagePath = "orbslamv3/ros2_test/src/ros2_orb_slam3/";
     std::string nodeName = "";
     std::string vocFilePath = "";
     std::string settingsFilePath = "";

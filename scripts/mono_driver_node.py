@@ -61,7 +61,7 @@ class MonoDriver(Node):
         print()
 
         # Kept only to minimize changes from original file
-        self.home_dir = str(Path.home()) + "/ros2_test/src/ros2_orb_slam3"
+        self.home_dir = str(Path.home()) + "/orbslamv3/ros2_test/src/ros2_orb_slam3"
         self.parent_dir = "TEST_DATASET"
         self.image_sequence_dir = self.home_dir + "/" + self.parent_dir + "/" + self.image_seq
 
@@ -197,7 +197,7 @@ class MonoDriver(Node):
             return
 
         now = self.get_clock().now().nanoseconds * 1e-9
-        if (now - self.latest_timestamp) > 0.1:
+        if (now - self.latest_timestamp) > 0.5:
             print(f"[PY] Stale frame ({now - self.latest_timestamp:.3f}s old), skipping")
             return
 
@@ -247,7 +247,7 @@ def main(args=None):
 
     # Blocking loop to send image and timestep message
     try:
-        target_period = 1.0 / 30.0
+        target_period = 1.0 / 10.0
         while rclpy.ok():
             start_time = time.time()
             rclpy.spin_once(n, timeout_sec=target_period * 0.8)

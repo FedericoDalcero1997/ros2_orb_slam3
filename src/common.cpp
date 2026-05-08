@@ -210,6 +210,20 @@ void MonocularMode::Img_callback(const sensor_msgs::msg::Image& msg)
         return;
     }
 
+    double imageTime =
+        static_cast<double>(msg.header.stamp.sec) +
+        static_cast<double>(msg.header.stamp.nanosec) * 1e-9;
+
+    if (lastImageTime <= 0.0)
+    {
+        // Primo frame: svuota il buffer IMU accumulato durante l'avvio
+        std::lock_guard<std::mutex> lock(imuMutex);
+        imuBuf.clear();
+        RCLCPP_INFO(this->get_logger(), "First frame: cleared stale IMU buffer");
+        lastImageTime = imageTime;
+        return;  // Salta il primo frame, parti dal secondo
+    }
+
     cv_bridge::CvImagePtr cv_ptr;
 
     try
@@ -227,10 +241,6 @@ void MonocularMode::Img_callback(const sensor_msgs::msg::Image& msg)
         RCLCPP_ERROR(this->get_logger(), "Error reading image: %s", e.what());
         return;
     }
-
-    double imageTime =
-        static_cast<double>(msg.header.stamp.sec) +
-        static_cast<double>(msg.header.stamp.nanosec) * 1e-9;
 
     std::vector<ORB_SLAM3::IMU::Point> vImuMeas;
 
@@ -268,12 +278,19 @@ void MonocularMode::Img_callback(const sensor_msgs::msg::Image& msg)
         }
     }
 
-    const size_t MIN_IMU_MEAS = 3;
-    if (lastImageTime > 0.0 && vImuMeas.size() < MIN_IMU_MEAS)
+    // const size_t MIN_IMU_MEAS = 5;
+    // if (lastImageTime > 0.0 && vImuMeas.size() < MIN_IMU_MEAS)
+    // {
+    //     RCLCPP_WARN(this->get_logger(),
+    //         "Too few IMU measurements (%zu < %zu), skipping frame",
+    //         vImuMeas.size(), MIN_IMU_MEAS);
+    //     return;
+    // }
+
+    if (vImuMeas.empty())
     {
         RCLCPP_WARN(this->get_logger(),
-            "Too few IMU measurements (%zu < %zu), skipping frame",
-            vImuMeas.size(), MIN_IMU_MEAS);
+            "No IMU measurements between frames, skipping frame");
         return;
     }
 
@@ -305,6 +322,22 @@ void MonocularMode::Img_callback(const sensor_msgs::msg::Image& msg)
 
 void MonocularMode::Imu_callback(const sensor_msgs::msg::Imu& msg)
 {
+    if (!imuBuf.empty())
+    {
+        double last =
+            imuBuf.back().header.stamp.sec +
+            imuBuf.back().header.stamp.nanosec * 1e-9;
+
+        double current =
+            msg.header.stamp.sec +
+            msg.header.stamp.nanosec * 1e-9;
+
+        if (current <= last)
+        {
+            RCLCPP_WARN(this->get_logger(),
+                "Non-monotonic IMU timestamp");
+        }
+    }
     std::lock_guard<std::mutex> lock(imuMutex);
     imuBuf.push_back(msg);
 

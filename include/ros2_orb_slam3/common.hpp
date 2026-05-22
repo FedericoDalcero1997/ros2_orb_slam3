@@ -59,9 +59,16 @@ private:
     std::string subImgMsgName = "";
     std::string subTimestepMsgName = "";
 
+    std::string subLeftImgMsgName = "";
+    std::string subRightImgMsgName = "";
+
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr   expConfig_subscription_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr      configAck_publisher_;
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subImgMsg_subscription_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
+        subLeftImg_subscription_;
+
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
+        subRightImg_subscription_;
     rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr  subTimestepMsg_subscription_;
 
     ORB_SLAM3::System* pAgent = nullptr;
@@ -71,8 +78,19 @@ private:
 
     void experimentSetting_callback(const std_msgs::msg::String& msg);
     void Timestep_callback(const std_msgs::msg::Float64& time_msg);
-    void Img_callback(const sensor_msgs::msg::Image& msg);
+    void LeftImg_callback(const sensor_msgs::msg::Image& msg);
+    void RightImg_callback(const sensor_msgs::msg::Image& msg);
+    // void Stereo_callback(
+    //     const sensor_msgs::msg::Image::ConstSharedPtr left,
+    //     const sensor_msgs::msg::Image::ConstSharedPtr right
+    // );
     void initializeVSLAM(std::string& configString);
+
+    sensor_msgs::msg::Image latestLeftMsg;
+    sensor_msgs::msg::Image latestRightMsg;
+
+    bool hasLeft = false;
+    bool hasRight = false;
 };
 
 #endif

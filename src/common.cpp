@@ -27,16 +27,17 @@ MonocularMode::MonocularMode() : Node("mono_node_cpp")
     {
         pass;
         vocFilePath = homeDir + "/" + packagePath + "orb_slam3/Vocabulary/ORBvoc.txt.bin";
-        settingsFilePath = homeDir + "/" + packagePath + "orb_slam3/config/Monocular/";
+        settingsFilePath = homeDir + "/" + packagePath + "orb_slam3/config/Stereo/";
     }
 
     RCLCPP_INFO(this->get_logger(), "nodeName %s", nodeName.c_str());
     RCLCPP_INFO(this->get_logger(), "voc_file %s", vocFilePath.c_str());
 
-    subexperimentconfigName = "/mono_py_driver/experiment_settings";
-    pubconfigackName        = "/mono_py_driver/exp_settings_ack";
-    subImgMsgName           = "/mono_py_driver/img_msg";
-    subTimestepMsgName      = "/mono_py_driver/timestep_msg";
+    subexperimentconfigName = "/stereo_py_driver/experiment_settings";
+    pubconfigackName        = "/stereo_py_driver/exp_settings_ack";
+    subLeftImgMsgName       = "/stereo_py_driver/left_image";
+    subRightImgMsgName      = "/stereo_py_driver/right_image";
+    subTimestepMsgName      = "/stereo_py_driver/timestep_msg";
 
     expConfig_subscription_ = this->create_subscription<std_msgs::msg::String>(
         subexperimentconfigName, 10,
@@ -45,9 +46,13 @@ MonocularMode::MonocularMode() : Node("mono_node_cpp")
     configAck_publisher_ = this->create_publisher<std_msgs::msg::String>(
         pubconfigackName, 10);
 
-    subImgMsg_subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
-        subImgMsgName, 10,
-        std::bind(&MonocularMode::Img_callback, this, _1));
+    subLeftImg_subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
+        subLeftImgMsgName, 10,
+        std::bind(&MonocularMode::LeftImg_callback, this, _1));
+
+    subRightImg_subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
+        subRightImgMsgName, 10,
+        std::bind(&MonocularMode::RightImg_callback, this, _1));
 
     subTimestepMsg_subscription_ = this->create_subscription<std_msgs::msg::Float64>(
         subTimestepMsgName, 10,
@@ -103,7 +108,7 @@ void MonocularMode::initializeVSLAM(std::string& configString)
     std::string fullSettingsFilePath = settingsFilePath + configString + ".yaml";
     RCLCPP_INFO(this->get_logger(), "Path to settings file: %s", fullSettingsFilePath.c_str());
 
-    sensorType = ORB_SLAM3::System::MONOCULAR;  // <-- era IMU_MONOCULAR
+    sensorType = ORB_SLAM3::System::STEREO;
 
     pAgent = new ORB_SLAM3::System(vocFilePath, fullSettingsFilePath, sensorType, enablePangolinWindow);
     RCLCPP_INFO(this->get_logger(), "ORB_SLAM3::System created, pAgent=%p", (void*)pAgent);
@@ -114,22 +119,77 @@ void MonocularMode::Timestep_callback(const std_msgs::msg::Float64& time_msg)
     timeStep = time_msg.data;
 }
 
-void MonocularMode::Img_callback(const sensor_msgs::msg::Image& msg)
+// void MonocularMode::Stereo_callback(
+//     const sensor_msgs::msg::Image::ConstSharedPtr left_msg,
+//     const sensor_msgs::msg::Image::ConstSharedPtr right_msg)
+// {
+//     if (!pAgent)
+//     {
+//         RCLCPP_ERROR(this->get_logger(), "pAgent null");
+//         return;
+//     }
+
+//     cv_bridge::CvImagePtr cv_left;
+//     cv_bridge::CvImagePtr cv_right;
+
+//     try
+//     {
+//         cv_left = cv_bridge::toCvCopy(left_msg);
+//         cv_right = cv_bridge::toCvCopy(right_msg);
+//     }
+//     catch (cv_bridge::Exception& e)
+//     {
+//         RCLCPP_ERROR(this->get_logger(), "cv_bridge error");
+//         return;
+//     }
+
+//     double imageTime =
+//         static_cast<double>(left_msg->header.stamp.sec) +
+//         static_cast<double>(left_msg->header.stamp.nanosec) * 1e-9;
+
+//     Sophus::SE3f Tcw =
+//         pAgent->TrackStereo(
+//             cv_left->image,
+//             cv_right->image,
+//             imageTime
+//         );
+// }
+
+void MonocularMode::RightImg_callback(
+    const sensor_msgs::msg::Image& msg)
+{
+    latestRightMsg = msg;
+    hasRight = true;
+}
+
+void MonocularMode::LeftImg_callback(
+    const sensor_msgs::msg::Image& msg)
 {
     if (!pAgent)
     {
-        RCLCPP_ERROR(this->get_logger(), "pAgent is null, skipping TrackMonocular");
+        RCLCPP_ERROR(this->get_logger(), "pAgent null");
         return;
     }
 
-    cv_bridge::CvImagePtr cv_ptr;
+    if (!hasRight)
+    {
+        return;
+    }
+
+    latestLeftMsg = msg;
+    hasLeft = true;
+
+    cv_bridge::CvImagePtr cv_left;
+    cv_bridge::CvImagePtr cv_right;
+
     try
     {
-        cv_ptr = cv_bridge::toCvCopy(msg);
+        cv_left = cv_bridge::toCvCopy(latestLeftMsg);
+        cv_right = cv_bridge::toCvCopy(latestRightMsg);
     }
     catch (cv_bridge::Exception& e)
     {
-        RCLCPP_ERROR(this->get_logger(), "cv_bridge error: %s", e.what());
+        RCLCPP_ERROR(this->get_logger(), "cv_bridge error");
         return;
     }
 
@@ -137,17 +197,28 @@ void MonocularMode::Img_callback(const sensor_msgs::msg::Image& msg)
         static_cast<double>(msg.header.stamp.sec) +
         static_cast<double>(msg.header.stamp.nanosec) * 1e-9;
 
-    Sophus::SE3f Tcw = pAgent->TrackMonocular(cv_ptr->image, imageTime);
+    Sophus::SE3f Tcw =
+        pAgent->TrackStereo(
+            cv_left->image,
+            cv_right->image,
+            imageTime
+        );
 
     if (Tcw.matrix().hasNaN())
     {
-        RCLCPP_WARN(this->get_logger(), "Invalid pose, skipping");
+        RCLCPP_WARN(this->get_logger(), "Invalid pose");
         return;
     }
 
     Sophus::SE3f Twc = Tcw.inverse();
+
     Eigen::Vector3f pos = Twc.translation();
-    RCLCPP_INFO(this->get_logger(),
-        "Camera position: x=%.3f y=%.3f z=%.3f | dist=%.3f",
-        pos.x(), pos.y(), pos.z(), pos.norm());
+
+    RCLCPP_INFO(
+        this->get_logger(),
+        "STEREO POS x=%.3f y=%.3f z=%.3f",
+        pos.x(),
+        pos.y(),
+        pos.z()
+    );
 }

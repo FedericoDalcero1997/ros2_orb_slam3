@@ -176,6 +176,7 @@ void MonocularMode::Timestep_callback(const std_msgs::msg::Float64& time_msg)
 
 void MonocularMode::trackingLoop()
 {
+    double lastProcessedTime = -1.0;
     while (true)
     {
         PendingFrame frame;
@@ -186,6 +187,16 @@ void MonocularMode::trackingLoop()
             frame = std::move(pendingFrame_);
             pendingFrame_.valid = false;
         }
+
+        if (lastProcessedTime > 0.0 && (frame.timestamp - lastProcessedTime) > 1.0)
+        {
+            RCLCPP_WARN(this->get_logger(),
+                "Frame gap %.2fs too large, skipping",
+                frame.timestamp - lastProcessedTime);
+            lastProcessedTime = frame.timestamp;
+            continue;
+        }
+        lastProcessedTime = frame.timestamp;
 
         Sophus::SE3f Tcw = pAgent->TrackMonocular(frame.image, frame.timestamp, frame.imuMeas);
 
@@ -297,22 +308,14 @@ void MonocularMode::Img_callback(const sensor_msgs::msg::Image& msg)
     {
         std::lock_guard<std::mutex> lock(frameMutex_);
 
-        if (pendingFrame_.valid)
+        // Always replace — don't merge IMU across skipped frames
+        pendingFrame_.image     = cv_ptr->image.clone();
+        pendingFrame_.timestamp = imageTime;
+        pendingFrame_.imuMeas   = std::move(vImuMeas);
+        
+        if (!pendingFrame_.valid)
         {
-            pendingFrame_.imuMeas.insert(
-                pendingFrame_.imuMeas.end(),
-                vImuMeas.begin(),
-                vImuMeas.end()
-            );
-            pendingFrame_.image     = cv_ptr->image.clone();
-            pendingFrame_.timestamp = imageTime;
-        }
-        else
-        {
-            pendingFrame_.image     = cv_ptr->image.clone();
-            pendingFrame_.timestamp = imageTime;
-            pendingFrame_.imuMeas   = std::move(vImuMeas);
-            pendingFrame_.valid     = true;
+            pendingFrame_.valid = true;
             frameCV_.notify_one();
         }
 

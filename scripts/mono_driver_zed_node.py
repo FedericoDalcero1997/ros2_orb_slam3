@@ -10,6 +10,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import String, Float64
 from cv_bridge import CvBridge
+import cv2
 
 
 class MonoDriverZED(Node):
@@ -73,7 +74,7 @@ class MonoDriverZED(Node):
         )
 
         # timer separato per pubblicare in modo ordinato
-        self.publish_timer_ = self.create_timer(1.0 / 20.0, self.publish_latest_frame)
+        self.publish_timer_ = self.create_timer(1.0 / 15.0, self.publish_latest_frame)
 
         print()
         print("MonoDriverZED initialized, attempting handshake with CPP node")
@@ -84,8 +85,6 @@ class MonoDriverZED(Node):
             self.send_config = False
             self.handshake_done = True
 
-            # importantissimo: ACK arriva prima di initializeVSLAM nel C++
-            # quindi aspettiamo un attimo prima di iniziare lo streaming
             time.sleep(1.0)
             self.ready_to_stream = True
 
@@ -102,10 +101,10 @@ class MonoDriverZED(Node):
 
         try:
             frame = self.br.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            frame = cv2.resize(frame, (960, 600), interpolation=cv2.INTER_AREA)
             img_msg = self.br.cv2_to_imgmsg(frame, encoding="passthrough")
             img_msg.header = msg.header
 
-            # salva solo l'ultimo frame disponibile
             self.latest_img_msg = img_msg
             self.latest_timestamp = float(msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec)
 
@@ -123,12 +122,14 @@ class MonoDriverZED(Node):
             timestep_msg = Float64()
             timestep_msg.data = self.latest_timestamp
 
-            # copia difensiva
             img_msg = copy.deepcopy(self.latest_img_msg)
 
-            # ordine identico al driver originale
             self.publish_timestep_msg_.publish(timestep_msg)
             self.publish_img_msg_.publish(img_msg)
+
+            # Clear after publish — critical!
+            self.latest_img_msg = None
+            self.latest_timestamp = None
 
             self.get_logger().info(
                 f"Published frame ns={int(timestep_msg.data)}",

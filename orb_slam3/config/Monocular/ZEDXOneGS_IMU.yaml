@@ -1,40 +1,42 @@
 %YAML:1.0
 
+# Corrisponde a immagini 960x600 (Python driver resize da 1920x1200)
 Camera.type: "PinHole"
 
-Camera.fx: 225.24
-Camera.fy: 240.92
-Camera.cx: 333.65
-Camera.cy: 197.83
+Camera.fx: 367.425
+Camera.fy: 367.248
+Camera.cx: 485.147
+Camera.cy: 292.160
 
 Camera.k1: 0.0
 Camera.k2: 0.0
 Camera.p1: 0.0
 Camera.p2: 0.0
 
-Camera.width: 640
-Camera.height: 400
-Camera.fps: 10
+Camera.width: 960
+Camera.height: 600
+Camera.fps: 15
 Camera.RGB: 0
+
+# Disabilita loop closing: causa problemi durante IMU init su mono
+loopClosing: 0
 
 Tbc: !!opencv-matrix
    rows: 4
    cols: 4
    dt: f
-   data: [0.0, -1.0, 0.0, 0.00708,
-          0.0, 0.0, -1.0, 0.00196,
-          1.0, 0.0, 0.0, -0.00610,
-          0.0, 0.0, 0.0, 1.0]
+   data: [0.999974,  0.004053,  0.006023, -0.0061,
+         -0.004042,  0.999990, -0.001750, -0.00708,
+         -0.006030,  0.001725,  0.999980, -0.00196,
+          0,          0,          0,        1      ]
 
-IMU.Frequency: 185
-IMU.NoiseGyro: 0.0002   # [rad/s/sqrt(Hz)] (check your IMU datasheet)
-IMU.NoiseAcc: 0.002     # [m/s^2/sqrt(Hz)] (check your IMU datasheet)
-IMU.GyroWalk: 0.00002   # [rad/s^2/sqrt(Hz)]
-IMU.AccWalk: 0.0002     # [m/s^3/sqrt(Hz)]
-IMU.Tau: 0.005
-IMU.Preintegration: true
+IMU.Frequency: 200
+IMU.NoiseGyro: 0.00017
+IMU.NoiseAcc:  0.00186
+IMU.GyroWalk:  0.0000022
+IMU.AccWalk:   0.000043
 
-ORBextractor.nFeatures: 2000
+ORBextractor.nFeatures: 1000
 ORBextractor.scaleFactor: 1.2
 ORBextractor.nLevels: 8
 ORBextractor.iniThFAST: 7
@@ -50,5 +52,3 @@ Viewer.ViewpointX: 0
 Viewer.ViewpointY: -0.7
 Viewer.ViewpointZ: -1.8
 Viewer.ViewpointF: 500
-Viewer.minFrames: 0
-Viewer.maxFrames: 30
